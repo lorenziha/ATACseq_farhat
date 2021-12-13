@@ -1,5 +1,7 @@
 #!/usr/bin/bash
 
+set -o errexit    # Used to exit upon error, avoiding cascading errors
+
 Help()
 {
    # Display Help
@@ -8,23 +10,35 @@ Help()
    echo "Syntax: ${0} [-p|-d|-t|-R|-a|-h]"
    echo "options:"
    echo "-p     seq file prefix. [./samples.prefix]"
-   echo "-d     genome dir where STAR index files are stored. [./STAR_DB]"
+   echo "-d     genome dir where BOWTIE2 index files are stored. [./BOWTIE2]"
    echo "-t     Number of threads (up to 16). [16]"
    echo "-R     Reads directory. [./READS]"
-   echo "-a     Annotation file in gtf format. [./gencode.v38.primary_assembly.annotation.gtf.gz]"
+   echo "-a     Annotation file in gtf format."
    echo "-h     Prints this help."
    echo
 }
 
+Log(message){
+	echo >> ATACseq.log 
+	echo ${message} >> ATACseq.log
+	echo >> ATACseq.log
+}
+
+# Initialize log file
+if [[ -e ATACseq.log ]]; then
+	rm -f ATACseq.log
+fi
+
+# Get options
 while getopts "hp:d:t:R:a:" option; do
    case $option in
         h) # display Help
                 Help
                 exit;;
-        p) input=${OPTARG};;
-        d) GENOME_DIR=${OPTARG};;
-        t) CPU=${OPTARG};;
-        R) READS=${OPTARG};;
+        p) input=${OPTARG:-./samples.prefix};;
+        d) GENOME_PATH=${OPTARG:-./BOWTIE2/genome.fasta};;
+        t) CPU=${OPTARG:-16};;
+        R) READS=${OPTARG:-./READS};;
 	a) GTF_ANNOTATION=${OPTARG};;
         \?) # incorrect option
                 echo
@@ -38,7 +52,7 @@ done
 
 
 # Job Name
-#$ -N RNAseq
+#$ -N ATACseq
 
 # Execute the script from the Current Working Directory
 #$ -cwd
@@ -47,10 +61,9 @@ done
 #$ -j y
 
 # Send the output of the script to a directory called 'UGE-output' uder current working directory (cwd)
-# - if [ ! -d "RNASEQ_output" ]; then #Create output directory in case it does NOT exist
-# -     mkdir RNASEQ_output
-# - fi
-# -$ -o RNASEQ_output/
+if [ ! -d "ATACseq_output" ]; then #Create output directory in case it does NOT exist
+    mkdir ATACseq_outputfi
+#$ -o ATACseq_output/
 
 # Tell the job your cpu and memory requirements
 #$ -pe threaded 16 
@@ -62,81 +75,56 @@ done
 #  Specify an email address to use
 #$ -M hernan.lorenzi@nih.gov
 
-
-# Add in the line below the path to the file containing raw read file prefixes; default "./samples.prefix".
-if [ -z ${input+x} ]; 
-	then 
-	echo "Using prefix file default ./samples.prefix"
-	input=./samples.prefix
-	else 
-	echo Using prefix file ${input}
+# Make temporary directory
+if [ ! -d "tmp" ]; then 
+    mkdir tmp
 fi
 
-# Modify the path below to point to the directory where yoiu store your raw read files. Subsequent processing read files and QC files will be stored in the same directory; default "./READS"
-if [ -z ${READS+x} ];
-        then
-        echo "Using reads directory default ./READS"
-        READS=./READS
-        else
-        echo Using prefix file ${READS}
-fi
+Log("Prefix file = ${input}")
+Log("Reads directory = ${READS}")
+Log("Annotation file = ${GTF_ANNOTATION}")
+Log("Genome directory = ${GENOME_DIR}")
+Log("CPU usage = ${CPU}")
 
-# Modify the line below to point to the Reference annotation file in GTF format; default human chromosome 1 ONLY "./REFERENCE/grch38/Chr1.GRCh38.103.gtf"
-if [ -z ${GTF_ANNOTATION+x} ]; 
-        then 
-        echo "Using annotation file default ./gencode.v38.primary_assembly.annotation.gtf.gz"
-        GTF_ANNOTATION=./gencode.v38.primary_assembly.annotation.gtf.gz
-        else 
-        echo Using prefix file ${GTF_ANNOTATION}
-fi
-
-# Modify the path below to point at the directory where you store the reference genome already indexed for STAR (you can get the indexed reference for human genome from STAR website)
-if [ -z ${GENOME_DIR+x} ]; 
-        then 
-        echo "Using STAR DB directory default ./STAR_DB"
-        GENOME_DIR=./STAR_DB
-        else 
-        echo Using prefix file ${GENOME_DIR}
-fi
-
-# Enter CPU usage, default = 8
-if [ -z ${CPU+x} ];
-        then
-        echo "Using CPU usage default = 16"
-        CPU=16
-        else
-        echo Using CPU usage = ${CPU}
-fi
-
-
-
+################
 # QC raw reads
+################
 
-module load fastqc
-while IFS= read -r prefix
-do
-	file1=${READS}/${prefix}.R1.fastq.gz
-	file2=${READS}/${prefix}.R2.fastq.gz
-	echo
-	echo Running FASTQC on $file1 and $file2
-	echo Starting time `date`
-	echo fastqc -t ${CPU} $file1 $file2
-	
-	fastqc -t ${CPU} $file1 $file2
-	echo
-	echo Done!!! `date`
-	echo
-done < "$input"
-module unload fastqc
+fun_FASTQC(){
+	module load fastqc
+	prefixe_file=$1
+	cpu=$2
+	dir=$3
+	while IFS= read -r prefix
+	do
+		read1=${dir}/${prefix}.R1.fastq.gz
+		read2=${dir}/${prefix}.R2.fastq.gz
+		Log("Running FASTQC on $file1 and $file2")
+		Log("Starting time `date`")
+		Log("fastqc -t ${cpu} ${read1} ${read2}")
+		fastqc -t ${cpu} ${read1} ${read2}
+		Log("Done!!! `date`")
+
+	done < "$prefixe_file"
+	module unload fastqc
+}
+
+Log("### QC raw reads ###")
+fun_FASTQC ${input} ${CPU} ${READS}
 
 # Run multiQC to merge all fastQC files together
-
 module load multiqc
-multiqc ${READS}/
+multiqc ./${READS}/
 module unload multiqc
 
+##################################
 ## Trimming reads with trimmomatic
 ## http://www.usadellab.org/cms/?page=trimmomatic
+##################################
+
+if [ ! -d "trimmomatic_output" ]; then #Create output directory in case it does NOT exist
+    mkdir trimmomatic_output 
+fi
 
 echo
 echo TRIMMING READS
@@ -148,92 +136,73 @@ while IFS= read -r prefix
 do
 	file1=${READS}/${prefix}.R1.fastq.gz
 	file2=${READS}/${prefix}.R2.fastq.gz
-	outP1=${READS}/${prefix}.R1.paired.fastq.gz
-	outP2=${READS}/${prefix}.R2.paired.fastq.gz
-	outUP1=${READS}/${prefix}.R1.unpaired.fastq.gz
-	outUP2=${READS}/${prefix}.R2.unpaired.fastq.gz
-	log=${READS}/${line}.trim.log
+	outP1=./trimmomatic_output/${prefix}.R1.paired.fastq.gz
+	outP2=./trimmomatic_output/${prefix}.R2.paired.fastq.gz
+	outUP1=trimmomatic_output/${prefix}.R1.unpaired.fastq.gz
+	outUP2=trimmomatic_output/${prefix}.R2.unpaired.fastq.gz
+	log=trimmomatic_output/${line}.trim.log
 
-	echo Trimming reads 
-	echo java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.36.jar PE -threads ${CPU} -trimlog $log $file1 $file2 $outP1 $outUP1 $outP2 $outUP2 ILLUMINACLIP:$EBROOTTRIMMOMATIC/adapters/TruSeq3-PE.fa:2:30:10 LEADING:10 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:30
-	echo
+	Log "Trimming reads" 
+	Log "java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.36.jar PE -threads ${CPU} -trimlog $log $file1 $file2 $outP1 $outUP1 $outP2 $outUP2 ILLUMINACLIP:$EBROOTTRIMMOMATIC/adapters/TruSeq3-PE.fa:2:30:10 LEADING:10 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:30"
 	java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.36.jar PE -threads ${CPU} -trimlog $log $file1 $file2 $outP1 $outUP1 $outP2 $outUP2 ILLUMINACLIP:$EBROOTTRIMMOMATIC/adapters/TruSeq3-PE.fa:2:30:10 LEADING:10 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:30
-	echo
+	Log "Trimmed $file 1 and $file2"
 done <$input
 module unload trimmomatic
 module unload Java
 
-module load fastqc
+#############################
+# Run QC on trimmed reads
+#############################
+
+fun_FASTQC ${input} ${CPU} "./trimmomatic_output"
+
+##############################
+# Run multiQC on trimmed reads
+##############################
+
+module load multiqc
+multiqc ./trimmomatic_output/
+module unload multiqc
+
+
+##################################
+# Mapped reads to reference genome
+##################################
+
+module load bowtie2/2.3.4.1 picard samtools 
+
+# Check for indexed bowtie2 library
+GENOME_DIR=${GENOME_PATH%/*}
+REFERENCE=${GENOME_PATH##*/}
+
+if [[ ! -e ./${GENOME_PATH}/genome.fasta ]]; then
+	echo "ERROR, I cannot find reference genome ${GENOME_PATH}"; echo;
+	exit(1)
+elif [[ ! -e ./${GENOME_DIR}/${REFERENCE}.rev2.bt2 ]]; then
+	bowtie2-build ./${GENOME_DIR}/${REFERENCE} 
+fi
+
+DB="./${GENOME_DIR}/${REFERENCE}"
+
 while IFS= read -r prefix
 do
-        file1=${READS}/${prefix}.R1.paired.fastq.gz
-        file2=${READS}/${prefix}.R2.paired.fastq.gz
-        echo
-        echo Running FASTQC on $file1 and $file2
-        echo Starting time `date`
-	echo fastqc -t ${CPU} $file1 $file2
+	Log "Running bowtie2 on ${prefix}"
+	Log "bowtie2 -p ${CPU} -x ${DB} -1 ${READS}/${prefix}.R1.paired.fastq.gz -2 ${READS}/${prefix}.R2.paired.fastq.gz \| samtools view -hb - \|samtools sort -@ 16 -T tmp -O BAM - \> ${prefix}.sorted.bam"
+	bowtie2 -p ${CPU} -x ${DB} -1 ${READS}/${prefix}.R1.paired.fastq.gz -2 ${READS}/${prefix}.R2.paired.fastq.gz | samtools view -hb - |samtools sort -@ 16 -T tmp -O BAM - > ${prefix}.sorted.bam 
 
-        fastqc -t ${CPU} $file1 $file2
-        echo
-        echo Done!!! `date`
-        echo
-done < "$input"
-module purge
-
-
-# Run STAR to map RNAseq reads to reference
-module load STAR
-
-while IFS= read -r prefix
-do
-	echo
-	echo running STAR on ${prefix}
-	echo
-	echo STAR --runMode alignReads --runThreadN ${CPU} --genomeDir ${GENOME_DIR} --readFilesCommand zcat --outSAMtype BAM SortedByCoordinate --readFilesIn ${READS}/${prefix}.R1.paired.fastq.gz ${READS}/${prefix}.R2.paired.fastq.gz
-echo 
-
-	STAR --runMode alignReads --runThreadN ${CPU} --genomeDir ${GENOME_DIR} --readFilesCommand zcat --outFileNamePrefix ${prefix}. --outSAMtype BAM SortedByCoordinate --readFilesIn ${READS}/${prefix}.R1.paired.fastq.gz ${READS}/${prefix}.R2.paired.fastq.gz
-	mv ${prefix}.Aligned.sortedByCoord.out.bam ${prefix}.sorted.bam
-	echo
-	echo Done!!
-	echo
-done <$input
-module purge
-
-# Sort the resulting sam file by chromosome position with samtools; remove duplicated reads with picard; 
-
-module load samtools
-module load picard
-
-files=()
-while IFS= read -r prefix 
-do
-	# No sorting needed. Sorting by coordinate is done during read mapping with STAR
-
-	echo REMOVE DUPLICATES
-	echo java -jar ${EBROOTPICARD}/picard.jar MarkDuplicates I=${prefix}.sorted.bam O=${prefix}.sorted.dedup.bam M=${prefix}.sorted.dedup.txt READ_NAME_REGEX=null REMOVE_DUPLICATES=true
+	Log "Removing duplicated reads with picard on ${prefix}.sorted.bam"
 	java -jar ${EBROOTPICARD}/picard.jar MarkDuplicates I=${prefix}.sorted.bam O=${prefix}.sorted.dedup.bam M=${prefix}.sorted.dedup.txt READ_NAME_REGEX=null REMOVE_DUPLICATES=true
-	
-	echo GENERATING BAM INDEX
-	echo samtools index ${prefix}.sorted.dedup.bam
-	samtools index ${prefix}.sorted.dedup.bam
-	
-	# Storing BAM file names for counting reads in bulk below
-	files+=(${prefix}.sorted.dedup.bam)
-        echo
-        echo Done!!
-        echo
-done <$input
-module purge 
 
-# Counting reads per gene per sample with featureCounts  and store results in file "all.counts"
-# Duplicated reads are removed during picard MarkDuplicates
-module load subread
-echo
-echo COUNTING READS FROM THE FOLLOWING sorted.dedup.bam FILES:
-echo ${files[@]}
-echo featureCounts -p -a $GTF_ANNOTATION -T ${CPU} -s 0 -F GTF -t exon -g gene_id -o all_counts.txt -R BAM --extraAttributes gene_name ${files[@]}
-# Counting PE reads as a single fragment (-p option)
-featureCounts -p -a $GTF_ANNOTATION -T ${CPU} -s 0 -F GTF -t exon -g gene_id -o all_counts.txt -R BAM --extraAttributes gene_name -O ${files[@]} 
+	Log "Creating bam index for ${prefix}.sorted.dedup.bam"
+	samtools index ${prefix}.sorted.dedup.bam
+
+	Log "Done!!"
+
+done <$input
+module purge
+
+## Running MACS2 to identify peaks
+module load macs2/2.1.0.20150731-goolf-1.7.20-Python-2.7.9
 
 module purge
+
