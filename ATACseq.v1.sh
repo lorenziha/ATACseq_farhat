@@ -18,9 +18,9 @@ Help()
    echo
 }
 
-Log(message){
+Log(){
 	echo >> ATACseq.log 
-	echo ${message} >> ATACseq.log
+	echo $1 >> ATACseq.log
 	echo >> ATACseq.log
 }
 
@@ -63,6 +63,7 @@ done
 # Send the output of the script to a directory called 'UGE-output' uder current working directory (cwd)
 if [ ! -d "ATACseq_output" ]; then #Create output directory in case it does NOT exist
     mkdir ATACseq_outputfi
+fi
 #$ -o ATACseq_output/
 
 # Tell the job your cpu and memory requirements
@@ -80,11 +81,11 @@ if [ ! -d "tmp" ]; then
     mkdir tmp
 fi
 
-Log("Prefix file = ${input}")
-Log("Reads directory = ${READS}")
-Log("Annotation file = ${GTF_ANNOTATION}")
-Log("Genome directory = ${GENOME_DIR}")
-Log("CPU usage = ${CPU}")
+Log "Prefix file = ${input}"
+Log "Reads directory = ${READS}"
+Log "Annotation file = ${GTF_ANNOTATION}"
+Log "Genome directory = ${GENOME_DIR}"
+Log "CPU usage = ${CPU}"
 
 ################
 # QC raw reads
@@ -97,25 +98,25 @@ fun_FASTQC(){
 	dir=$3
 	while IFS= read -r prefix
 	do
-		read1=${dir}/${prefix}.R1.fastq.gz
-		read2=${dir}/${prefix}.R2.fastq.gz
-		Log("Running FASTQC on $file1 and $file2")
-		Log("Starting time `date`")
-		Log("fastqc -t ${cpu} ${read1} ${read2}")
+		read1=${dir}/${prefix}.R1.*fastq.gz
+		read2=${dir}/${prefix}.R2.*fastq.gz
+		Log "Running FASTQC on $file1 and $file2"
+		Log "Starting time `date`"
+		Log "fastqc -t ${cpu} ${read1} ${read2}"
 		fastqc -t ${cpu} ${read1} ${read2}
-		Log("Done!!! `date`")
+		Log "Done!!! `date`"
 
 	done < "$prefixe_file"
-	module unload fastqc
+	module purge
 }
 
-Log("### QC raw reads ###")
+Log "### QC raw reads ###"
 fun_FASTQC ${input} ${CPU} ${READS}
 
 # Run multiQC to merge all fastQC files together
 module load multiqc
 multiqc ./${READS}/
-module unload multiqc
+module purge
 
 ##################################
 ## Trimming reads with trimmomatic
@@ -126,9 +127,9 @@ if [ ! -d "trimmomatic_output" ]; then #Create output directory in case it does 
     mkdir trimmomatic_output 
 fi
 
-echo
-echo TRIMMING READS
-echo
+
+Log "TRIMMING READS"
+
 
 module load trimmomatic
 
@@ -140,15 +141,15 @@ do
 	outP2=./trimmomatic_output/${prefix}.R2.paired.fastq.gz
 	outUP1=trimmomatic_output/${prefix}.R1.unpaired.fastq.gz
 	outUP2=trimmomatic_output/${prefix}.R2.unpaired.fastq.gz
-	log=trimmomatic_output/${line}.trim.log
+	log=trimmomatic_output/trim.log
 
 	Log "Trimming reads" 
 	Log "java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.36.jar PE -threads ${CPU} -trimlog $log $file1 $file2 $outP1 $outUP1 $outP2 $outUP2 ILLUMINACLIP:$EBROOTTRIMMOMATIC/adapters/TruSeq3-PE.fa:2:30:10 LEADING:10 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:30"
 	java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.36.jar PE -threads ${CPU} -trimlog $log $file1 $file2 $outP1 $outUP1 $outP2 $outUP2 ILLUMINACLIP:$EBROOTTRIMMOMATIC/adapters/TruSeq3-PE.fa:2:30:10 LEADING:10 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:30
 	Log "Trimmed $file 1 and $file2"
-done <$input
-module unload trimmomatic
-module unload Java
+done <${input}
+
+module purge
 
 #############################
 # Run QC on trimmed reads
@@ -162,7 +163,7 @@ fun_FASTQC ${input} ${CPU} "./trimmomatic_output"
 
 module load multiqc
 multiqc ./trimmomatic_output/
-module unload multiqc
+module purge
 
 
 ##################################
@@ -175,11 +176,12 @@ module load bowtie2/2.3.4.1 picard samtools
 GENOME_DIR=${GENOME_PATH%/*}
 REFERENCE=${GENOME_PATH##*/}
 
-if [[ ! -e ./${GENOME_PATH}/genome.fasta ]]; then
+if [[ ! -e ${GENOME_DIR}/${REFERENCE} ]]; then
 	echo "ERROR, I cannot find reference genome ${GENOME_PATH}"; echo;
-	exit(1)
-elif [[ ! -e ./${GENOME_DIR}/${REFERENCE}.rev2.bt2 ]]; then
-	bowtie2-build ./${GENOME_DIR}/${REFERENCE} 
+	exit 1
+elif [[ ! -e ${GENOME_DIR}/${REFERENCE}.rev2.bt2 ]]; then
+	bowtie2-build ${GENOME_DIR}/${REFERENCE} ${REFERENCE}
+	mv ${REFERENCE}.*bt2 ./${GENOME_DIR}/	
 fi
 
 DB="./${GENOME_DIR}/${REFERENCE}"
@@ -201,8 +203,10 @@ do
 done <$input
 module purge
 
-## Running MACS2 to identify peaks
-module load macs2/2.1.0.20150731-goolf-1.7.20-Python-2.7.9
+exit 0
 
-module purge
+# Running MACS2 to identify peaks
+#module load macs2/2.1.0.20150731-goolf-1.7.20-Python-2.7.9
+
+#module purge
 
