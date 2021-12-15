@@ -133,6 +133,10 @@ Log "TRIMMING READS"
 
 module load trimmomatic
 
+# Genertae adapter file from trimmomatic 
+
+cat $EBROOTTRIMMOMATIC/adapters/TruSeq3-PE.fa $EBROOTTRIMMOMATIC/adapters/NexteraPE-PE.fa > adapters.fasta
+
 while IFS= read -r prefix
 do
 	file1=${READS}/${prefix}.R1.fastq.gz
@@ -144,8 +148,8 @@ do
 	log=trimmomatic_output/trim.log
 
 	Log "Trimming reads" 
-	Log "java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.36.jar PE -threads ${CPU} -trimlog $log $file1 $file2 $outP1 $outUP1 $outP2 $outUP2 ILLUMINACLIP:$EBROOTTRIMMOMATIC/adapters/TruSeq3-PE.fa:2:30:10 LEADING:10 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:30"
-	java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.36.jar PE -threads ${CPU} -trimlog $log $file1 $file2 $outP1 $outUP1 $outP2 $outUP2 ILLUMINACLIP:$EBROOTTRIMMOMATIC/adapters/TruSeq3-PE.fa:2:30:10 LEADING:10 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:30
+	Log "java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.36.jar PE -threads ${CPU} -trimlog $log $file1 $file2 $outP1 $outUP1 $outP2 $outUP2 ILLUMINACLIP:adapters.fasta:2:30:10 LEADING:10 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:30"
+	java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.36.jar PE -threads ${CPU} -trimlog $log $file1 $file2 $outP1 $outUP1 $outP2 $outUP2 ILLUMINACLIP:adapters.fasta:2:30:10 LEADING:10 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:30
 	Log "Trimmed $file 1 and $file2"
 done <${input}
 
@@ -170,7 +174,7 @@ module purge
 # Mapped reads to reference genome
 ##################################
 
-module load bowtie2/2.3.4.1 picard samtools 
+module load bowtie2/2.3.4.1 picard samtools bedtools
 
 # Check for indexed bowtie2 library
 GENOME_DIR=${GENOME_PATH%/*}
@@ -189,14 +193,20 @@ DB="./${GENOME_DIR}/${REFERENCE}"
 while IFS= read -r prefix
 do
 	Log "Running bowtie2 on ${prefix}"
-	Log "bowtie2 -p ${CPU} -x ${DB} -1 ${READS}/${prefix}.R1.paired.fastq.gz -2 ${READS}/${prefix}.R2.paired.fastq.gz \| samtools view -hb - \|samtools sort -@ 16 -T tmp -O BAM - \> ${prefix}.sorted.bam"
-	bowtie2 -p ${CPU} -x ${DB} -1 ${READS}/${prefix}.R1.paired.fastq.gz -2 ${READS}/${prefix}.R2.paired.fastq.gz | samtools view -hb - |samtools sort -@ 16 -T tmp -O BAM - > ${prefix}.sorted.bam 
+	Log "bowtie2 -p ${CPU} -x ${DB} -1 ${READS}/${prefix}.R1.paired.fastq.gz -2 ${READS}/${prefix}.R2.paired.fastq.gz \| samtools view -hb - \|samtools sort -@ 16 -T tmp -O BAM - \> ATACseq_output/${prefix}.sorted.bam"
+	bowtie2 -p ${CPU} -x ${DB} -1 ${READS}/${prefix}.R1.paired.fastq.gz -2 ${READS}/${prefix}.R2.paired.fastq.gz | samtools view -hb - |samtools sort -@ 16 -T tmp -O BAM - > ATACseq_output/${prefix}.sorted.bam 
 
-	Log "Removing duplicated reads with picard on ${prefix}.sorted.bam"
-	java -jar ${EBROOTPICARD}/picard.jar MarkDuplicates I=${prefix}.sorted.bam O=${prefix}.sorted.dedup.bam M=${prefix}.sorted.dedup.txt READ_NAME_REGEX=null REMOVE_DUPLICATES=true
+	Log "Removing duplicated reads with picard on ATACseq_output/${prefix}.sorted.bam"
+	java -jar ${EBROOTPICARD}/picard.jar MarkDuplicates I=ATACseq_output/${prefix}.sorted.bam O=ATACseq_output/${prefix}.sorted.dedup.bam M=${prefix}.sorted.dedup.txt READ_NAME_REGEX=null REMOVE_DUPLICATES=true
 
-	Log "Creating bam index for ${prefix}.sorted.dedup.bam"
-	samtools index ${prefix}.sorted.dedup.bam
+	Log "Creating bam index for ATACseq_output/${prefix}.sorted.dedup.bam"
+	samtools index ATACseq_output/${prefix}.sorted.dedup.bam
+
+	Log "Filter out blacklist regions for ATACseq_output/${prefix}.sorted.dedup.bam"
+	bedtools intersect -v -abam ATACseq_output/${prefix}.sorted.dedup.bam  -b blacklist.bed > ATACseq_output/${prefix}.sorted.dedup.filter.bam
+
+	Log "Convert bam file to bed for ATACseq_output/${prefix}.sorted.dedup.filter.bam"
+	bedtools bamtobed -i ATACseq_output/${prefix}.sorted.dedup.filter.bam > ATACseq_output/${prefix}.sorted.dedup.filter.bed
 
 	Log "Done!!"
 
@@ -204,6 +214,10 @@ done <$input
 module purge
 
 exit 0
+
+# Remove reads that overlap with black list bed file
+# using bedtools intersect [OPTIONS] -a <bed/gff/vcf/bam> -b <bed/gff/vcf/bam> -v
+# bedtools intersect -v -abam FILE.BAM -b BLACKLIST.BED > FILTERED.BAM 
 
 # Running MACS2 to identify peaks
 #module load macs2/2.1.0.20150731-goolf-1.7.20-Python-2.7.9
