@@ -5,32 +5,22 @@ set -o errexit    # Used to exit upon error, avoiding cascading errors
 Help()
 {
    # Display Help
-   echo "This script runs STAR on a fasta file to generate STAR index files."
+   echo "This script runs the ATACseq pipeline using the following approach:"
+   echo "trimmomatic (adapter removal and quality trimming) > bowtie2 (mapping) > bedtools (remove blacklist and mitochondrial reads) > macs2 (peak calling)"
    echo
-   echo "Syntax: ${0} [-p|-d|-t|-R|-a|-h]"
+   echo "Syntax: ${0} [-p|-d|-t|-R|-o|-h]"
    echo "options:"
    echo "-p     seq file prefix. [./samples.prefix]"
    echo "-d     genome dir where BOWTIE2 index files are stored. [./BOWTIE2]"
    echo "-t     Number of threads (up to 16). [16]"
    echo "-R     Reads directory. [./READS]"
-   echo "-a     Annotation file in gtf format."
+   echo "-o     Output directory [./ATACseq_output]"
    echo "-h     Prints this help."
    echo
 }
 
-Log(){
-	echo >> ATACseq.log 
-	echo $1 >> ATACseq.log
-	echo >> ATACseq.log
-}
-
-# Initialize log file
-if [[ -e ATACseq.log ]]; then
-	rm -f ATACseq.log
-fi
-
 # Get options
-while getopts "hp:d:t:R:a:" option; do
+while getopts "hp:d:t:R:o:" option; do
    case $option in
         h) # display Help
                 Help
@@ -39,7 +29,7 @@ while getopts "hp:d:t:R:a:" option; do
         d) GENOME_PATH=${OPTARG:-./BOWTIE2/genome.fasta};;
         t) CPU=${OPTARG:-16};;
         R) READS=${OPTARG:-./READS};;
-	a) GTF_ANNOTATION=${OPTARG};;
+	o) WORKING_DIR=${OPTARG:-./ATACseq_output};;
         \?) # incorrect option
                 echo
                 echo "Error, Invalid option"
@@ -61,10 +51,10 @@ done
 #$ -j y
 
 # Send the output of the script to a directory called 'UGE-output' uder current working directory (cwd)
-if [ ! -d "ATACseq_output" ]; then #Create output directory in case it does NOT exist
-    mkdir ATACseq_outputfi
+if [ ! -d ${WORKING_DIR} ]; then #Create output directory in case it does NOT exist
+    mkdir ${WORKING_DIR}
 fi
-#$ -o ATACseq_output/
+#$ -o ${WORKING_DIR}/
 
 # Tell the job your cpu and memory requirements
 #$ -pe threaded 16 
@@ -76,9 +66,15 @@ fi
 #  Specify an email address to use
 #$ -M hernan.lorenzi@nih.gov
 
-# Make temporary directory
-if [ ! -d "tmp" ]; then 
-    mkdir tmp
+Log(){
+        echo >> ${WORKING_DIR}/ATACseq.log
+        echo "$1" >> ${WORKING_DIR}/ATACseq.log
+        echo >> ${WORKING_DIR}/ATACseq.log
+}
+
+# Initialize log file
+if [[ -e ATACseq.log ]]; then
+	rm -f ATACseq.log
 fi
 
 Log "Prefix file = ${input}"
@@ -110,21 +106,21 @@ fun_FASTQC(){
 	module purge
 }
 
-Log "### QC raw reads ###"
-fun_FASTQC ${input} ${CPU} ${READS}
+Log "echo ### QC raw reads ###"
+Log "fun_FASTQC ${input} ${CPU} ${READS}"
 
 # Run multiQC to merge all fastQC files together
 module load multiqc
-multiqc ./${READS}/
+multiqc --outdir ${WORKING_DIR}/multiqc ./${READS}/
 module purge
 
 ##################################
 ## Trimming reads with trimmomatic
 ## http://www.usadellab.org/cms/?page=trimmomatic
 ##################################
-
-if [ ! -d "trimmomatic_output" ]; then #Create output directory in case it does NOT exist
-    mkdir trimmomatic_output 
+echo WORKING_DIR = ${WORKING_DIR} .
+if [ ! -d "${WORKING_DIR}/trimmomatic_output" ]; then #Create output directory in case it does NOT exist
+    mkdir ${WORKING_DIR}/trimmomatic_output 
 fi
 
 
@@ -135,21 +131,21 @@ module load trimmomatic
 
 # Genertae adapter file from trimmomatic 
 
-cat $EBROOTTRIMMOMATIC/adapters/TruSeq3-PE.fa $EBROOTTRIMMOMATIC/adapters/NexteraPE-PE.fa > adapters.fasta
+cat $EBROOTTRIMMOMATIC/adapters/TruSeq3-PE.fa $EBROOTTRIMMOMATIC/adapters/NexteraPE-PE.fa > ${WORKING_DIR}/adapters.fasta
 
 while IFS= read -r prefix
 do
 	file1=${READS}/${prefix}.R1.fastq.gz
 	file2=${READS}/${prefix}.R2.fastq.gz
-	outP1=./trimmomatic_output/${prefix}.R1.paired.fastq.gz
-	outP2=./trimmomatic_output/${prefix}.R2.paired.fastq.gz
-	outUP1=trimmomatic_output/${prefix}.R1.unpaired.fastq.gz
-	outUP2=trimmomatic_output/${prefix}.R2.unpaired.fastq.gz
-	log=trimmomatic_output/trim.log
+	outP1=${WORKING_DIR}/trimmomatic_output/${prefix}.R1.paired.fastq.gz
+	outP2=${WORKING_DIR}/trimmomatic_output/${prefix}.R2.paired.fastq.gz
+	outUP1=${WORKING_DIR}/trimmomatic_output/${prefix}.R1.unpaired.fastq.gz
+	outUP2=${WORKING_DIR}/trimmomatic_output/${prefix}.R2.unpaired.fastq.gz
+	log=${WORKING_DIR}/trimmomatic_output/trim.log
 
 	Log "Trimming reads" 
-	Log "java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.36.jar PE -threads ${CPU} -trimlog $log $file1 $file2 $outP1 $outUP1 $outP2 $outUP2 ILLUMINACLIP:adapters.fasta:2:30:10 LEADING:10 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:30"
-	java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.36.jar PE -threads ${CPU} -trimlog $log $file1 $file2 $outP1 $outUP1 $outP2 $outUP2 ILLUMINACLIP:adapters.fasta:2:30:10 LEADING:10 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:30
+	Log "java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.36.jar PE -threads ${CPU} -trimlog $log $file1 $file2 $outP1 $outUP1 $outP2 $outUP2 ILLUMINACLIP:${WORKING_DIR}/adapters.fasta:2:30:10 LEADING:10 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:30"
+	java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.36.jar PE -threads ${CPU} -trimlog $log $file1 $file2 $outP1 $outUP1 $outP2 $outUP2 ILLUMINACLIP:${WORKING_DIR}/adapters.fasta:2:30:10 LEADING:10 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:30
 	Log "Trimmed $file 1 and $file2"
 done <${input}
 
@@ -159,19 +155,19 @@ module purge
 # Run QC on trimmed reads
 #############################
 
-fun_FASTQC ${input} ${CPU} "./trimmomatic_output"
+fun_FASTQC ${input} ${CPU} "${WORKING_DIR}/trimmomatic_output"
 
 ##############################
 # Run multiQC on trimmed reads
 ##############################
 
 module load multiqc
-multiqc ./trimmomatic_output/
+multiqc --outdir ${WORKING_DIR}/multiqc ${WORKING_DIR}/trimmomatic_output/
 module purge
 
 
 ##################################
-# Mapped reads to reference genome
+Log "Map reads to reference genome"
 ##################################
 
 module load bowtie2/2.3.4.1 picard samtools bedtools macs2
@@ -185,7 +181,7 @@ if [[ ! -e ${GENOME_DIR}/${REFERENCE} ]]; then
 	exit 1
 elif [[ ! -e ${GENOME_DIR}/${REFERENCE}.rev.2.bt2 ]]; then
 	bowtie2-build ${GENOME_DIR}/${REFERENCE} ${REFERENCE}
-	mv ${REFERENCE}.*bt2 ./${GENOME_DIR}/	
+	mv ${REFERENCE}*bt2 ./${GENOME_DIR}/	
 fi
 
 DB="./${GENOME_DIR}/${REFERENCE}"
@@ -193,33 +189,44 @@ DB="./${GENOME_DIR}/${REFERENCE}"
 while IFS= read -r prefix
 do
 	Log "Running bowtie2 on ${prefix}"
-	Log "bowtie2 -p ${CPU} -x ${DB} -1 trimmomatic_output/${prefix}.R1.paired.fastq.gz -2 trimmomatic_output/${prefix}.R2.paired.fastq.gz \| samtools view -hb - \|samtools sort -@ 16 -T tmp -O BAM - \> ATACseq_output/${prefix}.sorted.bam"
-	bowtie2 -p ${CPU} -x ${DB} -1 trimmomatic_output/${prefix}.R1.paired.fastq.gz -2 trimmomatic_output/${prefix}.R2.paired.fastq.gz | samtools view -hb - |samtools sort -@ 16 -T tmp -O BAM - > ATACseq_output/${prefix}.sorted.bam 
+	Log "bowtie2 --rg "ID:${prefix}\tPL:Illumina\tLB:${prefix}\tPU:${prefix}\tSM:${prefix}" -p ${CPU} -x ${DB} -1 ${WORKING_DIR}/trimmomatic_output/${prefix}.R1.paired.fastq.gz -2 ${WORKING_DIR}/trimmomatic_output/${prefix}.R2.paired.fastq.gz \| samtools view -hb - \|samtools sort -@ 16 -T tmp -O BAM - \> ${WORKING_DIR}/${prefix}.sorted.bam"
+	bowtie2 --rg "ID:${prefix}	PL:Illumina	SM:${prefix}	LB:${prefix}" -p ${CPU} -x ${DB} -1 ${WORKING_DIR}/trimmomatic_output/${prefix}.R1.paired.fastq.gz -2 ${WORKING_DIR}/trimmomatic_output/${prefix}.R2.paired.fastq.gz | samtools view -hb - |samtools sort -@ 16 -T tmp -O BAM - > ${WORKING_DIR}/${prefix}.sorted.bam 
 
-	Log "Removing duplicated reads with picard on ATACseq_output/${prefix}.sorted.bam"
-	java -jar ${EBROOTPICARD}/picard.jar MarkDuplicates I=ATACseq_output/${prefix}.sorted.bam O=ATACseq_output/${prefix}.sorted.dedup.bam M=${prefix}.sorted.dedup.txt READ_NAME_REGEX=null REMOVE_DUPLICATES=true
+	Log "java -jar ${EBROOTPICARD}/picard.jar CollectAlignmentSummaryMetrics R=./GRCh38/GRCh38.primary_assembly.genome.fa I=./${WORKING_DIR}/${prefix}.sorted.bam O=${prefix}.metrics.txt"
+	java -jar ${EBROOTPICARD}/picard.jar CollectAlignmentSummaryMetrics R=./GRCh38/GRCh38.primary_assembly.genome.fa I=./${WORKING_DIR}/${prefix}.sorted.bam O=${WORKING_DIR}/${prefix}.metrics.txt
 
-	Log "Creating bam index for ATACseq_output/${prefix}.sorted.dedup.bam"
-	samtools index ATACseq_output/${prefix}.sorted.dedup.bam
+	Log "Removing duplicated reads with picard on ${WORKING_DIR}/${prefix}.sorted.bam"
+	java -jar ${EBROOTPICARD}/picard.jar MarkDuplicates I=${WORKING_DIR}/${prefix}.sorted.bam O=${WORKING_DIR}/${prefix}.sorted.dedup.bam M=${prefix}.sorted.dedup.txt READ_NAME_REGEX=null REMOVE_DUPLICATES=true
 
-	Log "Filter out blacklist and mitochondrial egions from ATACseq_output/${prefix}.sorted.dedup.bam"
-	bedtools intersect -v -abam ATACseq_output/${prefix}.sorted.dedup.bam  -b ./blacklist/blacklist_and_mito.bed > ATACseq_output/${prefix}.sorted.dedup.filter.bam
+	Log "Creating bam index for ${WORKING_DIR}/${prefix}.sorted.dedup.bam"
+	samtools index ${WORKING_DIR}/${prefix}.sorted.dedup.bam
+	mv ${prefix}.sorted.dedup.txt ${WORKING_DIR}/
 
-	Log "Convert bam file to bed for ATACseq_output/${prefix}.sorted.dedup.filter.bam"
-	bedtools bamtobed -i ATACseq_output/${prefix}.sorted.dedup.filter.bam > ATACseq_output/${prefix}.sorted.dedup.filter.bed
+	Log "Filter out blacklist and mitochondrial egions from ${WORKING_DIR}/${prefix}.sorted.dedup.bam"
+	bedtools intersect -v -abam ${WORKING_DIR}/${prefix}.sorted.dedup.bam  -b ./blacklist/blacklist_and_mito.bed > ${WORKING_DIR}/${prefix}.sorted.dedup.filter.bam
 
-	Log "Calling peaks with macs2 on ATACseq_output/${prefix}.sorted.dedup.filter.bed"
-	macs2 callpeak --treatment ATACseq_output/${prefix}.sorted.dedup.filter.bed \
+	Log "Convert bam file to bed for ${WORKING_DIR}/${prefix}.sorted.dedup.filter.bam"
+	bedtools bamtobed -i ${WORKING_DIR}/${prefix}.sorted.dedup.filter.bam > ${WORKING_DIR}/${prefix}.sorted.dedup.filter.bed
+
+	Log "Calling peaks with macs2 on ${WORKING_DIR}/${prefix}.sorted.dedup.filter.bed"
+	macs2 callpeak --treatment ${WORKING_DIR}/${prefix}.sorted.dedup.filter.bed \
 		        --name ${prefix} --format BED \
 			--gsize hs --shift -75 --extsize 150 \
 			--nomodel --nolambda -B --SPMR --keep-dup all \
-			-p 0.05 --verbose 3 --outdir macs2_output
+			-p 0.05 --verbose 3 --outdir ${WORKING_DIR}/macs2_output
 
 	Log "Done!!"
 
 done <$input
 module purge
 
-exit 0
+# Generate metrics summary
+grep -h '^CATEGORY' ${WORKING_DIR}/*.metrics.txt |head -1 | sed -e 's/CATEGORY/SAMPLE_ID	CATEGORY/'> ${WORKING_DIR}/read_mapping_metrics_summary.txt
+while IFS= read -r prefix
+do
+	grep -hv '^#\|^CATEGORY' ${WORKING_DIR}/${prefix}.metrics.txt| grep . |sed 's/^/'${prefix}'	/' >> ${WORKING_DIR}/read_mapping_metrics_summary.txt
 
+done <$input
+
+exit 0
 
