@@ -174,7 +174,7 @@ module purge
 # Mapped reads to reference genome
 ##################################
 
-module load bowtie2/2.3.4.1 picard samtools bedtools
+module load bowtie2/2.3.4.1 picard samtools bedtools macs2
 
 # Check for indexed bowtie2 library
 GENOME_DIR=${GENOME_PATH%/*}
@@ -183,7 +183,7 @@ REFERENCE=${GENOME_PATH##*/}
 if [[ ! -e ${GENOME_DIR}/${REFERENCE} ]]; then
 	echo "ERROR, I cannot find reference genome ${GENOME_PATH}"; echo;
 	exit 1
-elif [[ ! -e ${GENOME_DIR}/${REFERENCE}.rev2.bt2 ]]; then
+elif [[ ! -e ${GENOME_DIR}/${REFERENCE}.rev.2.bt2 ]]; then
 	bowtie2-build ${GENOME_DIR}/${REFERENCE} ${REFERENCE}
 	mv ${REFERENCE}.*bt2 ./${GENOME_DIR}/	
 fi
@@ -193,8 +193,8 @@ DB="./${GENOME_DIR}/${REFERENCE}"
 while IFS= read -r prefix
 do
 	Log "Running bowtie2 on ${prefix}"
-	Log "bowtie2 -p ${CPU} -x ${DB} -1 ${READS}/${prefix}.R1.paired.fastq.gz -2 ${READS}/${prefix}.R2.paired.fastq.gz \| samtools view -hb - \|samtools sort -@ 16 -T tmp -O BAM - \> ATACseq_output/${prefix}.sorted.bam"
-	bowtie2 -p ${CPU} -x ${DB} -1 ${READS}/${prefix}.R1.paired.fastq.gz -2 ${READS}/${prefix}.R2.paired.fastq.gz | samtools view -hb - |samtools sort -@ 16 -T tmp -O BAM - > ATACseq_output/${prefix}.sorted.bam 
+	Log "bowtie2 -p ${CPU} -x ${DB} -1 trimmomatic_output/${prefix}.R1.paired.fastq.gz -2 trimmomatic_output/${prefix}.R2.paired.fastq.gz \| samtools view -hb - \|samtools sort -@ 16 -T tmp -O BAM - \> ATACseq_output/${prefix}.sorted.bam"
+	bowtie2 -p ${CPU} -x ${DB} -1 trimmomatic_output/${prefix}.R1.paired.fastq.gz -2 trimmomatic_output/${prefix}.R2.paired.fastq.gz | samtools view -hb - |samtools sort -@ 16 -T tmp -O BAM - > ATACseq_output/${prefix}.sorted.bam 
 
 	Log "Removing duplicated reads with picard on ATACseq_output/${prefix}.sorted.bam"
 	java -jar ${EBROOTPICARD}/picard.jar MarkDuplicates I=ATACseq_output/${prefix}.sorted.bam O=ATACseq_output/${prefix}.sorted.dedup.bam M=${prefix}.sorted.dedup.txt READ_NAME_REGEX=null REMOVE_DUPLICATES=true
@@ -202,11 +202,18 @@ do
 	Log "Creating bam index for ATACseq_output/${prefix}.sorted.dedup.bam"
 	samtools index ATACseq_output/${prefix}.sorted.dedup.bam
 
-	Log "Filter out blacklist regions for ATACseq_output/${prefix}.sorted.dedup.bam"
-	bedtools intersect -v -abam ATACseq_output/${prefix}.sorted.dedup.bam  -b blacklist.bed > ATACseq_output/${prefix}.sorted.dedup.filter.bam
+	Log "Filter out blacklist and mitochondrial egions from ATACseq_output/${prefix}.sorted.dedup.bam"
+	bedtools intersect -v -abam ATACseq_output/${prefix}.sorted.dedup.bam  -b ./blacklist/blacklist_and_mito.bed > ATACseq_output/${prefix}.sorted.dedup.filter.bam
 
 	Log "Convert bam file to bed for ATACseq_output/${prefix}.sorted.dedup.filter.bam"
 	bedtools bamtobed -i ATACseq_output/${prefix}.sorted.dedup.filter.bam > ATACseq_output/${prefix}.sorted.dedup.filter.bed
+
+	Log "Calling peaks with macs2 on ATACseq_output/${prefix}.sorted.dedup.filter.bed"
+	macs2 callpeak --treatment ATACseq_output/${prefix}.sorted.dedup.filter.bed \
+		        --name ${prefix} --format BED \
+			--gsize hs --shift -75 --extsize 150 \
+			--nomodel --nolambda -B --SPMR --keep-dup all \
+			-p 0.05 --verbose 3 --outdir macs2_output
 
 	Log "Done!!"
 
@@ -215,12 +222,4 @@ module purge
 
 exit 0
 
-# Remove reads that overlap with black list bed file
-# using bedtools intersect [OPTIONS] -a <bed/gff/vcf/bam> -b <bed/gff/vcf/bam> -v
-# bedtools intersect -v -abam FILE.BAM -b BLACKLIST.BED > FILTERED.BAM 
-
-# Running MACS2 to identify peaks
-#module load macs2/2.1.0.20150731-goolf-1.7.20-Python-2.7.9
-
-#module purge
 
