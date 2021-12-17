@@ -6,7 +6,7 @@ Help()
 {
    # Display Help
    echo "This script runs the ATACseq pipeline using the following approach:"
-   echo "trimmomatic (adapter removal and quality trimming) > bowtie2 (mapping) > bedtools (remove blacklist and mitochondrial reads) > macs2 (peak calling)"
+   echo "cutadapt (adapter removal and quality trimming) > bowtie2 (mapping) > bedtools (remove blacklist and mitochondrial reads) > macs2 (peak calling)"
    echo
    echo "Syntax: ${0} [-p|-d|-t|-R|-o|-h]"
    echo "options:"
@@ -51,7 +51,7 @@ done
 #$ -j y
 
 # Send the output of the script to a directory called 'UGE-output' uder current working directory (cwd)
-if [ ! -d ${WORKING_DIR} ]; then #Create output directory in case it does NOT exist
+if [ ! -d "${WORKING_DIR}" ]; then #Create output directory in case it does NOT exist
     mkdir ${WORKING_DIR}
 fi
 #$ -o ${WORKING_DIR}/
@@ -107,7 +107,7 @@ fun_FASTQC(){
 }
 
 Log "echo ### QC raw reads ###"
-Log "fun_FASTQC ${input} ${CPU} ${READS}"
+fun_FASTQC ${input} ${CPU} ${READS}
 
 # Run multiQC to merge all fastQC files together
 module load multiqc
@@ -115,56 +115,53 @@ multiqc --outdir ${WORKING_DIR}/multiqc ./${READS}/
 module purge
 
 ##################################
-## Trimming reads with trimmomatic
-## http://www.usadellab.org/cms/?page=trimmomatic
+## Trimming reads with cutadapt
+## http://www.usadellab.org/cms/?page=cutadapt
 ##################################
 echo WORKING_DIR = ${WORKING_DIR} .
-if [ ! -d "${WORKING_DIR}/trimmomatic_output" ]; then #Create output directory in case it does NOT exist
-    mkdir ${WORKING_DIR}/trimmomatic_output 
+if [ ! -d "${WORKING_DIR}/cutadapt_output" ]; then #Create output directory in case it does NOT exist
+    mkdir ${WORKING_DIR}/cutadapt_output 
 fi
 
 
 Log "TRIMMING READS"
 
 
-module load trimmomatic
-
-# Genertae adapter file from trimmomatic 
-
-cat $EBROOTTRIMMOMATIC/adapters/TruSeq3-PE.fa $EBROOTTRIMMOMATIC/adapters/NexteraPE-PE.fa > ${WORKING_DIR}/adapters.fasta
+module load cutadapt/2.7-Python-3.7.3
 
 while IFS= read -r prefix
 do
+
 	file1=${READS}/${prefix}.R1.fastq.gz
 	file2=${READS}/${prefix}.R2.fastq.gz
-	outP1=${WORKING_DIR}/trimmomatic_output/${prefix}.R1.paired.fastq.gz
-	outP2=${WORKING_DIR}/trimmomatic_output/${prefix}.R2.paired.fastq.gz
-	outUP1=${WORKING_DIR}/trimmomatic_output/${prefix}.R1.unpaired.fastq.gz
-	outUP2=${WORKING_DIR}/trimmomatic_output/${prefix}.R2.unpaired.fastq.gz
-	log=${WORKING_DIR}/trimmomatic_output/trim.log
+	outP1=${WORKING_DIR}/cutadapt_output/${prefix}.R1.paired.fastq.gz
+	outP2=${WORKING_DIR}/cutadapt_output/${prefix}.R2.paired.fastq.gz
 
-	Log "Trimming reads" 
-	Log "java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.36.jar PE -threads ${CPU} -trimlog $log $file1 $file2 $outP1 $outUP1 $outP2 $outUP2 ILLUMINACLIP:${WORKING_DIR}/adapters.fasta:2:30:10 LEADING:10 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:30"
-	java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.36.jar PE -threads ${CPU} -trimlog $log $file1 $file2 $outP1 $outUP1 $outP2 $outUP2 ILLUMINACLIP:${WORKING_DIR}/adapters.fasta:2:30:10 LEADING:10 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:30
+	Log "Trimming reads"
+        Log "cutadapt -u 15 -U 15 --minimum-length=3 --quality-base=33 --error-rate=0.1 -g CTGTCTCTTATACACATCT -G CTGTCTCTTATACACATCT -o $outP1  -p $outP2 $file1 $file2"	
+	cutadapt -u 15 -U 15 --minimum-length=3 --quality-base=33 --error-rate=0.1 \
+		-a CTGTCTCTTATACACATCT \
+		-A CTGTCTCTTATACACATCT \
+		-o $outP1  -p $outP2 $file1 $file2
 	Log "Trimmed $file 1 and $file2"
 done <${input}
 
 module purge
 
+
 #############################
 # Run QC on trimmed reads
 #############################
 
-fun_FASTQC ${input} ${CPU} "${WORKING_DIR}/trimmomatic_output"
+fun_FASTQC ${input} ${CPU} "${WORKING_DIR}/cutadapt_output"
 
 ##############################
 # Run multiQC on trimmed reads
 ##############################
 
 module load multiqc
-multiqc --outdir ${WORKING_DIR}/multiqc ${WORKING_DIR}/trimmomatic_output/
+multiqc --outdir ${WORKING_DIR}/multiqc ${WORKING_DIR}/cutadapt_output/
 module purge
-
 
 ##################################
 Log "Map reads to reference genome"
@@ -189,8 +186,8 @@ DB="./${GENOME_DIR}/${REFERENCE}"
 while IFS= read -r prefix
 do
 	Log "Running bowtie2 on ${prefix}"
-	Log "bowtie2 --rg "ID:${prefix}\tPL:Illumina\tLB:${prefix}\tPU:${prefix}\tSM:${prefix}" -p ${CPU} -x ${DB} -1 ${WORKING_DIR}/trimmomatic_output/${prefix}.R1.paired.fastq.gz -2 ${WORKING_DIR}/trimmomatic_output/${prefix}.R2.paired.fastq.gz \| samtools view -hb - \|samtools sort -@ 16 -T tmp -O BAM - \> ${WORKING_DIR}/${prefix}.sorted.bam"
-	bowtie2 --rg "ID:${prefix}	PL:Illumina	SM:${prefix}	LB:${prefix}" -p ${CPU} -x ${DB} -1 ${WORKING_DIR}/trimmomatic_output/${prefix}.R1.paired.fastq.gz -2 ${WORKING_DIR}/trimmomatic_output/${prefix}.R2.paired.fastq.gz | samtools view -hb - |samtools sort -@ 16 -T tmp -O BAM - > ${WORKING_DIR}/${prefix}.sorted.bam 
+	Log "bowtie2 --rg "ID:${prefix}\tPL:Illumina\tLB:${prefix}\tPU:${prefix}\tSM:${prefix}" -p ${CPU} -x ${DB} -1 ${WORKING_DIR}/cutadapt_output/${prefix}.R1.paired.fastq.gz -2 ${WORKING_DIR}/cutadapt_output/${prefix}.R2.paired.fastq.gz \| samtools view -hb - \|samtools sort -@ 16 -T tmp -O BAM - \> ${WORKING_DIR}/${prefix}.sorted.bam"
+	bowtie2 --rg "ID:${prefix}	PL:Illumina	SM:${prefix}	LB:${prefix}" -p ${CPU} -x ${DB} -1 ${WORKING_DIR}/cutadapt_output/${prefix}.R1.paired.fastq.gz -2 ${WORKING_DIR}/cutadapt_output/${prefix}.R2.paired.fastq.gz | samtools view -hb - |samtools sort -@ 16 -T tmp -O BAM - > ${WORKING_DIR}/${prefix}.sorted.bam 
 
 	Log "java -jar ${EBROOTPICARD}/picard.jar CollectAlignmentSummaryMetrics R=./GRCh38/GRCh38.primary_assembly.genome.fa I=./${WORKING_DIR}/${prefix}.sorted.bam O=${prefix}.metrics.txt"
 	java -jar ${EBROOTPICARD}/picard.jar CollectAlignmentSummaryMetrics R=./GRCh38/GRCh38.primary_assembly.genome.fa I=./${WORKING_DIR}/${prefix}.sorted.bam O=${WORKING_DIR}/${prefix}.metrics.txt
